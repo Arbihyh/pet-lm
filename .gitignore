@@ -20,3 +20,5 @@ _gh_whoami.ps1
 _gh_create.ps1
 runs/
 .venv/
+_gh_push.ps1
+_gh_verify.ps1
