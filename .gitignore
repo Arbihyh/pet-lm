@@ -1,0 +1,22 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*.so
+
+# Generated datasets and vocab (reproducible from templates.py via gen_data.py)
+train.jsonl
+test.jsonl
+vocab.json
+
+# Checkpoints
+*.pt
+*.safetensors
+*.bin
+*.cact
+
+# Local scratch — credential-touching helpers stay off the remote
+_probe_env.ps1
+_gh_whoami.ps1
+_gh_create.ps1
+runs/
+.venv/
