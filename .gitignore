@@ -22,3 +22,4 @@ runs/
 .venv/
 _gh_push.ps1
 _gh_verify.ps1
+_gh_clone.ps1

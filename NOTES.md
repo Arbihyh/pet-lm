@@ -146,13 +146,35 @@ reverse engineering. It is items 1 and 3 that make it not worth doing.
 
 ---
 
-## 4. Open questions
+## 4. Seed variance
 
-- Real-speech accuracy. Everything measured so far is within the template
-  distribution.
-- Seed variance. One seed per arm; the 1.7-point baseline/ple gap is not
-  meaningful without more.
-- Whether refusal can be made reliable with data alone, or needs a confidence
-  gate. Near-miss refusal sits at 44% and the held-out negative set is 34 rows.
+Three seeds, `baseline` arm. Reported because single-seed differences in this
+project turned out to be meaningless, and one of them was published as a result
+before being checked.
+
+| config | L3 | refusal |
+|---|---|---|
+| `--decorate 0`, 800 steps | 93.6 +/- 6.1 | 61.6 +/- 30.6 |
+| `--decorate 8`, 3000 steps | 94.4 +/- 4.9 | 20.1 +/- 3.2 |
+
+Per-seed refusal at `--decorate 0`: 83.3 / 26.6 / 75.0. A single run of that
+configuration produced the 83.3 that an earlier README reported as the headline
+number. The standard deviation is 30.6 -- the model does not refuse, it sometimes
+happens to.
+
+L3 spread is +/- 5, so any comparison closer than ~10 points is noise. That
+covers both the `baseline` vs `ple` gap (1.7 points) and the decoration
+comparison (0.8 points).
+
+## 5. Open questions
+
+- Real-speech accuracy. Everything measured so far is inside the template
+  distribution, including the held-out split, which shares its vocabulary and
+  sentence shapes with training.
+- Whether refusal is reachable with data at all. It trains on a different
+  schedule from composition -- best early, degrading after -- so one checkpoint
+  may not serve both. A confidence gate at inference is the more likely answer:
+  reading plan-token probability and declining below a threshold turns a wrong
+  action into a question.
 - Chinese. Character-level vocabulary is larger and single characters are
   ambiguous; whether 2.2M parameters holds up there is untested.

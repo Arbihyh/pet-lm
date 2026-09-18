@@ -227,6 +227,97 @@ HELDOUT_JOINERS = [
     "{a} and subsequently {b}",
 ]
 
+
+# ---------------------------------------------------------------------------
+# Surface expansion. Hand-writing 600 phrasings does not scale and stops being
+# reviewable; these decorate the phrasings above instead, so diversity is
+# multiplicative. Necessary because 226 unique L1 texts oversampled to 13,600
+# rows means each template is seen ~60 times per pass, and the model memorises
+# surface forms by ~800 steps (L3 peaks at 97.5% there, falls to 74% by 2000).
+#
+# Every entry must preserve the instruction reading. "maybe {p}" is excluded:
+# it makes the row a hypothetical, which belongs in NEGATIVES.
+PREFIXES = [
+    "", "", "", "",              # unmodified stays the plurality
+    "now ", "quick ", "come on ", "hey ", "ok ", "alright ",
+    "go on ", "please ", "just ", "let's ", "time to ", "i want you to ",
+    "i need you to ", "you should ", "how about you ", "why don't you ",
+]
+
+SUFFIXES = [
+    "", "", "", "",
+    " now", " please", " quickly", " for me", " already", " right now",
+    " ok", " will you", " would you", " go ahead", " if you can",
+    " little one", " buddy", " good boy",
+]
+
+# Applied to a whole composed instruction rather than to one operand.
+WRAPPERS = [
+    "{p}", "{p}", "{p}", "{p}",
+    "can you {p}", "could you {p}", "i said {p}", "listen {p}",
+    "{p} thanks", "{p} thank you",
+]
+
+
+def _has_leading_politeness(text):
+    """Whether a phrasing already carries a politeness or question marker.
+
+    Stacking produces "please can you please stand up please", which no operator
+    says and which teaches the model that these markers are noise to be ignored
+    rather than surface variation to be tolerated.
+    """
+    head = text.split()[:2]
+    return any(w in ("please", "can", "could", "will", "would") for w in head)
+
+
+# Prefixes safe to put on one half of a composed instruction. The verbose ones
+# ("i want you to", "how about you") read as a fresh sentence and produce
+# double-subject garbage when the fragment is then joined to another.
+LIGHT_PREFIXES = ["", "", "", "", "now ", "quick ", "just "]
+LIGHT_SUFFIXES = ["", "", "", "", " now", " quickly", " please"]
+
+
+def decorate(text, rng, allow_wrapper=True, light=False):
+    """One decorated surface form of `text`.
+
+    Returns `text` unchanged a good fraction of the time: the undecorated form is
+    the one an operator most often uses, and it must stay the plurality of the
+    training distribution rather than becoming a rare case.
+
+    `light` restricts to modifiers that survive being joined to another
+    fragment, for use on composition operands.
+    """
+    out = text
+    polite_already = _has_leading_politeness(out)
+    prefixes = LIGHT_PREFIXES if light else PREFIXES
+    suffixes = LIGHT_SUFFIXES if light else SUFFIXES
+
+    # At most one modifier position per phrasing. Stacking a prefix, a suffix and
+    # a wrapper yields "come on go right go ahead" or "could you alright get flat
+    # please" -- strings that teach the model these markers are noise rather than
+    # variation to tolerate.
+    slot = rng.choice(("prefix", "suffix", "wrapper" if not light else "suffix"))
+
+    if slot == "prefix":
+        prefix = rng.choice(prefixes)
+        if prefix and polite_already and prefix.strip() in (
+                "please", "how about you", "why don't you", "i want you to",
+                "i need you to", "you should"):
+            prefix = ""
+        out = prefix + out
+    elif slot == "suffix":
+        suffix = rng.choice(suffixes)
+        if suffix.strip() in ("please", "will you", "would you") and polite_already:
+            suffix = ""
+        out = out + suffix
+    elif allow_wrapper:
+        wrapper = rng.choice(WRAPPERS)
+        if wrapper != "{p}" and not polite_already:
+            out = wrapper.format(p=out)
+
+    return " ".join(out.split())
+
+
 # ---------------------------------------------------------------------------
 # Negatives -> empty plan. Four kinds, because a single kind teaches the model
 # to reject one surface pattern rather than to reject what it cannot act on.

@@ -30,21 +30,32 @@ def _numeral_unit(n, rng):
     return num, unit
 
 
-def l1_rows(heldout, rng):
-    """Single action, no count."""
+def l1_rows(heldout, rng, decorate_n=0, light=False):
+    """Single action, no count.
+
+    `decorate_n` extra decorated variants per phrasing. Raising surface diversity
+    is the only thing that helps here: 226 unique L1 texts oversampled to 13,600
+    rows is ~60 repeats of each template per pass, and the model starts fitting
+    surface forms rather than the mapping by ~800 steps. More ROWS at the same
+    diversity only raises the repeat factor.
+    """
     rows = []
-    source = T.HELDOUT_PHRASINGS if heldout else None
     for action, spec in T.ACTIONS.items():
         if heldout:
-            phrasings = source.get(action, [])
+            phrasings = T.HELDOUT_PHRASINGS.get(action, [])
         else:
             phrasings = [p for reg in T.PHRASINGS[action].values() for p in reg]
         for text in phrasings:
-            rows.append({"text": text, "plan": [spec["token"]], "level": "l1"})
+            variants = {text}
+            for _ in range(decorate_n):
+                variants.add(T.decorate(text, rng, light=light))
+            for surface in variants:
+                rows.append({"text": surface, "plan": [spec["token"]],
+                             "level": "l1"})
     return rows
 
 
-def l2_rows(heldout, rng):
+def l2_rows(heldout, rng, decorate_n=0, light=False):
     """Action plus repeat count.
 
     Held-out side varies the numeral surface only, so l2 is reported but is not
@@ -64,22 +75,32 @@ def l2_rows(heldout, rng):
                 if n == 1:
                     text = text.replace(f"{num} times", "once")
                     text = text.replace(f"{num} jumps", "one jump")
-                rows.append({"text": text, "plan": [token, f"<{n}>"], "level": "l2"})
+                variants = {text}
+                for _ in range(decorate_n):
+                    variants.add(T.decorate(text, rng, light=light))
+                for surface in variants:
+                    rows.append({"text": surface, "plan": [token, f"<{n}>"],
+                                 "level": "l2"})
     return rows
 
 
-def _atoms(heldout, rng):
-    """Single-action fragments usable as a composition operand, with their plans."""
+def _atoms(heldout, rng, decorate_n=0):
+    """Single-action fragments usable as a composition operand, with their plans.
+
+    Operands are decorated with `allow_wrapper=False` inside l3_rows' own call,
+    because a wrapper ("can you X") around one half of a two-action instruction
+    reads as a question about that half rather than a command.
+    """
     atoms = []
-    for row in l1_rows(heldout, rng):
+    for row in l1_rows(heldout, rng, decorate_n, light=True):
         atoms.append((row["text"], row["plan"]))
     if not heldout:
-        for row in l2_rows(heldout, rng):
+        for row in l2_rows(heldout, rng, decorate_n, light=True):
             atoms.append((row["text"], row["plan"]))
     return atoms
 
 
-def l3_rows(n_rows, heldout, rng, atom_heldout=None):
+def l3_rows(n_rows, heldout, rng, atom_heldout=None, decorate_n=0):
     """Two actions in a stated order.
 
     Two independent axes:
@@ -96,7 +117,11 @@ def l3_rows(n_rows, heldout, rng, atom_heldout=None):
     """
     if atom_heldout is None:
         atom_heldout = heldout
-    atoms = _atoms(atom_heldout, rng)
+    # Operands are decorated only lightly: an already-decorated fragment joined
+    # to another produces "how about you you should forward buddy and then ...",
+    # which no operator says. The whole-instruction wrapper below carries the
+    # variation instead.
+    atoms = _atoms(atom_heldout, rng, 1 if decorate_n else 0)
     joiners = T.HELDOUT_JOINERS if heldout else T.JOINERS
     rows, seen = [], set()
     attempts = 0
@@ -106,6 +131,9 @@ def l3_rows(n_rows, heldout, rng, atom_heldout=None):
         if pa == pb:
             continue  # "sit then sit" is not a composition
         text = rng.choice(joiners).format(a=ta, b=tb)
+        # A wrapper belongs around the whole instruction, never one operand.
+        if decorate_n and rng.random() < 0.3:
+            text = T.decorate(text, rng, allow_wrapper=True)
         if text in seen:
             continue
         seen.add(text)
@@ -123,6 +151,11 @@ def negative_rows(heldout=None, rng=None, holdout_frac=0.35):
     "make me a coffee" and "how are you" share no surface feature -- so every
     kind must be represented in training, and the held-out rows are unseen
     sentences of a kind the model has learned to refuse.
+
+    Never decorated. Decorating negatives was measured and lost outright: it put
+    "please", "can you", "now" into 86% of negative rows alongside 89% of
+    positive ones, erasing the only cue separating an instruction from a remark.
+    Refusal fell from 83% to 27% while L3 barely moved.
     """
     rows = []
     for kind, texts in T.NEGATIVES.items():
@@ -152,7 +185,8 @@ def oversample(rows, target, rng):
     return out[:target]
 
 
-def build(seed=0, n_train=40000, n_test_l3=1500, ground_heldout=True):
+def build(seed=0, n_train=40000, n_test_l3=1500, ground_heldout=True,
+          decorate_n=0):
     """Train/test rows.
 
     `ground_heldout`: include a SMALL number of L1 rows built from the held-out
@@ -170,17 +204,19 @@ def build(seed=0, n_train=40000, n_test_l3=1500, ground_heldout=True):
     rng = random.Random(seed)
 
     # ---- train ----
-    tr_l1 = l1_rows(False, rng)
-    tr_l2 = l2_rows(False, rng)
-    tr_l3 = l3_rows(int(n_train * 0.22), False, rng)
+    # decorate_n multiplies surface diversity; n_train only multiplies repeats.
+    tr_l1 = l1_rows(False, rng, decorate_n)
+    tr_l2 = l2_rows(False, rng, decorate_n)
+    tr_l3 = l3_rows(int(n_train * 0.22), False, rng, decorate_n=decorate_n)
     # Composition over held-out ATOM wordings but TRAINING joiners. This is the
     # fix for the 26.5% "second action wrong" bucket: those words previously
     # appeared only as bare one-word commands, so the model never had to read
     # them in a trailing clause. The test's connective stays unseen.
-    tr_l3_ground = (l3_rows(int(n_train * 0.10), False, rng, atom_heldout=True)
+    tr_l3_ground = (l3_rows(int(n_train * 0.10), False, rng, atom_heldout=True,
+                            decorate_n=decorate_n)
                     if ground_heldout else [])
     tr_neg = negative_rows(heldout=False)
-    ground = l1_rows(True, rng) if ground_heldout else []
+    ground = l1_rows(True, rng, decorate_n) if ground_heldout else []
 
     train = (oversample(tr_l1, int(n_train * 0.26), rng)
              + oversample(tr_l2, int(n_train * 0.20), rng)
@@ -191,8 +227,9 @@ def build(seed=0, n_train=40000, n_test_l3=1500, ground_heldout=True):
     rng.shuffle(train)
 
     # ---- test ----
-    # L1 held-out rows are now grounded, so they are no longer a generalisation
-    # test; they are reported as a lexical sanity check. L3 carries the verdict.
+    # Undecorated on purpose. Decoration is a training-side intervention, and
+    # scoring against a decorated test set would move the target at the same time
+    # as the treatment, making the two runs incomparable.
     te_l1 = l1_rows(True, rng)
     te_l2 = l2_rows(True, rng)
     te_l3 = l3_rows(n_test_l3, True, rng)
@@ -214,9 +251,13 @@ def main():
     ap.add_argument("--test-l3", type=int, default=1500)
     ap.add_argument("--out-train", default="train.jsonl")
     ap.add_argument("--out-test", default="test.jsonl")
+    ap.add_argument("--decorate", type=int, default=6,
+                    help="extra decorated variants per phrasing (0 = off). "
+                         "This, not --train, is what adds information.")
     args = ap.parse_args()
 
-    train, test, leaked = build(args.seed, args.train, args.test_l3)
+    train, test, leaked = build(args.seed, args.train, args.test_l3,
+                                decorate_n=args.decorate)
 
     for path, rows in ((args.out_train, train), (args.out_test, test)):
         with open(path, "w", encoding="utf-8") as fh:
@@ -232,9 +273,22 @@ def main():
     print(f"train {len(train):>6}  {tally(train)}")
     print(f"test  {len(test):>6}  {tally(test)}")
     print(f"dropped {len(leaked)} test rows that collided with train")
+
+    # Repeat factor is the number that predicts memorisation, so report it.
+    print("\nsurface diversity (repeat factor = rows / unique texts):")
+    for level in sorted({r["level"] for r in train}):
+        rows = [r for r in train if r["level"] == level]
+        uniq = len({r["text"] for r in rows})
+        print(f"  {level:<18} {len(rows):>6} rows  {uniq:>6} unique  "
+              f"{len(rows) / uniq:>5.1f}x")
+    uniq_all = len({r["text"] for r in train})
+    print(f"  {'TOTAL':<18} {len(train):>6} rows  {uniq_all:>6} unique  "
+          f"{len(train) / uniq_all:>5.1f}x")
+
     print("\nsamples:")
-    for r in train[:4] + [r for r in test if r["level"] == "l3"][:3]:
-        print(f"  [{r['level']:>9}] {r['text']!r:58} -> {' '.join(r['plan']) or '(empty)'}")
+    for r in train[:5] + [r for r in test if r["level"] == "l3"][:2]:
+        print(f"  [{r['level']:>9}] {r['text']!r:62} -> "
+              f"{' '.join(r['plan']) or '(empty)'}")
 
 
 if __name__ == "__main__":
