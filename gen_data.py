@@ -141,6 +141,36 @@ def l3_rows(n_rows, heldout, rng, atom_heldout=None, decorate_n=0):
     return rows
 
 
+def prohibition_rows(heldout, rng, decorate_n=0):
+    """Prohibitions -> empty plan.
+
+    The failure these fix was total: "do not sit down" emitted <squat> with
+    P(stop) = 0.000, and so did every other action's prohibition. `not`, `don't`
+    and `never` appeared in no template, so they were absent from the vocabulary
+    and encoded as <unk> -- "do not sit down" and "do sit down" were the same
+    input. The model was not wrong, it was never told.
+
+    Emitting an empty plan is the same OUTPUT as a refusal but a different
+    lesson: a refusal says "this is not an instruction", a prohibition says "this
+    is an instruction not to act". Keeping them as separate levels means the
+    scoring can tell which one broke.
+    """
+    patterns = (T.HELDOUT_PROHIBIT_PATTERNS if heldout
+                else T.PROHIBIT_PATTERNS)
+    rows = []
+    for action, (verb, ving) in T.ACTION_VERBS.items():
+        for pattern in patterns:
+            text = pattern.format(v=verb, ving=ving)
+            variants = {text}
+            for _ in range(decorate_n):
+                # light=True: a wrapper like "can you do not sit down" is not
+                # English, and a prohibition already opens with its own marker.
+                variants.add(T.decorate(text, rng, light=True))
+            for surface in variants:
+                rows.append({"text": surface, "plan": [], "level": "prohibit"})
+    return rows
+
+
 def negative_rows(heldout=None, rng=None, holdout_frac=0.35):
     """Empty plan.
 
@@ -216,14 +246,16 @@ def build(seed=0, n_train=40000, n_test_l3=1500, ground_heldout=True,
                             decorate_n=decorate_n)
                     if ground_heldout else [])
     tr_neg = negative_rows(heldout=False)
+    tr_prohibit = prohibition_rows(False, rng, decorate_n)
     ground = l1_rows(True, rng, decorate_n) if ground_heldout else []
 
-    train = (oversample(tr_l1, int(n_train * 0.26), rng)
-             + oversample(tr_l2, int(n_train * 0.20), rng)
+    train = (oversample(tr_l1, int(n_train * 0.24), rng)
+             + oversample(tr_l2, int(n_train * 0.18), rng)
              + tr_l3
              + tr_l3_ground
-             + oversample(tr_neg, int(n_train * 0.14), rng)
-             + oversample(ground, int(n_train * 0.08), rng))
+             + oversample(tr_neg, int(n_train * 0.12), rng)
+             + oversample(tr_prohibit, int(n_train * 0.08), rng)
+             + oversample(ground, int(n_train * 0.06), rng))
     rng.shuffle(train)
 
     # ---- test ----
@@ -234,13 +266,17 @@ def build(seed=0, n_train=40000, n_test_l3=1500, ground_heldout=True,
     te_l2 = l2_rows(True, rng)
     te_l3 = l3_rows(n_test_l3, True, rng)
     te_neg = negative_rows(heldout=True)
-    test = te_l1 + te_l2 + te_l3 + te_neg
+    te_prohibit = prohibition_rows(True, rng)
+    test = te_l1 + te_l2 + te_l3 + te_neg + te_prohibit
 
-    # L3 test rows must not appear verbatim in training.
+    # Neither composed nor prohibition test rows may appear verbatim in training.
+    # L1/L2/negative test rows are grounded deliberately, so they are exempt.
+    checked = ("l3", "prohibit")
     train_texts = {r["text"] for r in train}
-    leaked = [r for r in test if r["level"] == "l3" and r["text"] in train_texts]
+    leaked = [r for r in test
+              if r["level"] in checked and r["text"] in train_texts]
     test = [r for r in test
-            if r["level"] != "l3" or r["text"] not in train_texts]
+            if r["level"] not in checked or r["text"] not in train_texts]
     return train, test, leaked
 
 

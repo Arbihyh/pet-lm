@@ -141,7 +141,10 @@ def score(model, stoi, itos, rows, device, seq_len, max_new=8, batch=512):
 
 def report(tag, per_level, action_hits, counts):
     print(f"\n--- {tag} ---")
-    order = ["l1", "l2", "l3"] + sorted(k for k in per_level if k.startswith("neg"))
+    # `prohibit` is listed apart from `neg_*`: both want an empty plan, but a
+    # prohibition IS an instruction, so conflating them hides which one failed.
+    order = (["l1", "l2", "l3", "prohibit"]
+             + sorted(k for k in per_level if k.startswith("neg")))
     for lvl in order:
         if lvl not in per_level:
             continue

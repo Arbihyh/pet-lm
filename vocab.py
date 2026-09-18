@@ -80,6 +80,21 @@ def template_words():
             add(f)
     for u in T.UNITS_SINGULAR + T.UNITS_PLURAL:
         add(u)
+    # Prohibitions and the decoration modifiers. Omitting these is exactly the
+    # bug that made "do not sit down" indistinguishable from "do sit down":
+    # `not` and `never` were in no collected template, so they had no id and
+    # encoded as <unk>, deleting the negation before the model saw it.
+    for pattern in T.PROHIBIT_PATTERNS + T.HELDOUT_PROHIBIT_PATTERNS:
+        add(pattern.replace("{v}", " ").replace("{ving}", " "))
+    for verb, ving in T.ACTION_VERBS.values():
+        add(verb)
+        add(ving)
+    for n in T.NEGATORS:
+        add(n)
+    for m in (T.PREFIXES + T.SUFFIXES + T.LIGHT_PREFIXES + T.LIGHT_SUFFIXES):
+        add(m)
+    for w in T.WRAPPERS:
+        add(w.replace("{p}", " "))
     return sorted(seen)
 
 

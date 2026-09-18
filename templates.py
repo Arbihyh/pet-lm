@@ -28,9 +28,14 @@ reflects generalisation rather than memorisation.
 """
 
 # ---------------------------------------------------------------------------
-# Action inventory. Matches the 12 behaviours the STM32 firmware already drives.
-# `takes_count` marks the ones a repeat count is meaningful for; asking a dog to
-# "sleep three times" is not a command anyone gives, so those stay unary.
+# Action inventory. The first twelve match the behaviours the STM32 firmware
+# already drives. `takes_count` marks the ones a repeat count is meaningful for;
+# asking a dog to "sleep three times" is not a command anyone gives, so those
+# stay unary.
+#
+# `stop` is the thirteenth and was added after testing: "stop", "wait", "stay"
+# and "don't move" are real instructions, not refusals. Halting the servos is
+# something the pet DOES; emitting an empty plan would leave it mid-gait.
 # ---------------------------------------------------------------------------
 ACTIONS = {
     "stand":   {"token": "<stand>",   "takes_count": False},
@@ -45,6 +50,7 @@ ACTIONS = {
     "jump":    {"token": "<jump>",    "takes_count": True},
     "greet":   {"token": "<greet>",   "takes_count": False},
     "stretch": {"token": "<stretch>", "takes_count": False},
+    "stop":    {"token": "<stop>",    "takes_count": False},
 }
 
 # ---------------------------------------------------------------------------
@@ -139,6 +145,18 @@ PHRASINGS = {
         "question": ["can you stretch", "will you stretch", "would you stretch out"],
         "casual":   ["big stretch", "loosen up", "stretch it out"],
     },
+    # `stop` halts the servos, so it is an action and not a refusal. Its wordings
+    # carry the negation vocabulary the rest of the file lacked, which is also
+    # what makes "don't move" resolvable at all.
+    "stop": {
+        "bare":     ["stop", "stop it", "halt", "freeze", "wait",
+                     "stay", "stay there", "hold still", "do not move",
+                     "don't move", "stop moving", "stand still"],
+        "polite":   ["please stop", "stop please", "wait please"],
+        "question": ["can you stop", "will you stop", "would you wait"],
+        "casual":   ["hold on", "hold up", "knock it off", "that's enough",
+                     "enough"],
+    },
 }
 
 # Never trained on. Real alternate wordings, so accuracy here is generalisation.
@@ -156,6 +174,7 @@ HELDOUT_PHRASINGS = {
     "jump": ["spring up", "take a leap", "jump once"],
     "greet": ["introduce yourself", "welcome me", "say good morning"],
     "stretch": ["extend yourself", "have a good stretch", "reach out"],
+    "stop": ["cease", "pause", "stop right there", "do not carry on"],
 }
 
 # ---------------------------------------------------------------------------
@@ -367,3 +386,87 @@ NEGATIVES = {
               "er", "ah", "oh", "eh", "mm", "hm", "yeah", "no",
               "maybe", "sure", "right then", "anyway"],
 }
+
+
+# ---------------------------------------------------------------------------
+# Prohibitions -> empty plan.
+#
+# Added after testing showed the worst failure in the project: "do not sit down"
+# produced <squat> with P(stop) = 0.000, and the same held for every action. The
+# cause was not misunderstanding, it was that `not`, `don't` and `never` were
+# absent from the vocabulary entirely -- no template contained them -- so they
+# encoded as <unk> and "do not sit down" was literally the same input as
+# "do sit down". Negation was deleted at tokenisation, before the model saw it.
+#
+# These map to an empty plan, the same output as a refusal but reached by a
+# different route: the sentence IS an instruction, and the instruction is to not
+# act. Prohibition-plus-alternative ("don't sit, lie down instead") is out of
+# scope; it needs a plan representation that can express suppression.
+# ---------------------------------------------------------------------------
+NEGATORS = ["do not", "don't", "dont", "never", "no", "stop", "quit", "cease"]
+
+PROHIBIT_PATTERNS = [
+    "do not {v}", "don't {v}", "dont {v}", "never {v}",
+    "please do not {v}", "please don't {v}",
+    "i said do not {v}", "you must not {v}",
+    "do not {v} please", "don't {v} ok",
+    "no {ving}", "stop {ving}", "quit {ving}",
+    "you should not {v}", "do not ever {v}",
+]
+
+# Bare verb and -ing form per action, for the two pattern shapes above.
+ACTION_VERBS = {
+    "stand":   ("stand up", "standing"),
+    "forward": ("walk forward", "walking forward"),
+    "back":    ("walk back", "walking back"),
+    "left":    ("turn left", "turning left"),
+    "right":   ("turn right", "turning right"),
+    "tail":    ("wag your tail", "wagging your tail"),
+    "lie":     ("lie down", "lying down"),
+    "squat":   ("sit down", "sitting down"),
+    "sleep":   ("go to sleep", "sleeping"),
+    "jump":    ("jump", "jumping"),
+    "greet":   ("say hello", "saying hello"),
+    "stretch": ("stretch", "stretching"),
+}
+
+HELDOUT_PROHIBIT_PATTERNS = [
+    "refrain from {ving}",
+    "i do not want you to {v}",
+    "do not {v} any more",
+]
+
+
+def action_names():
+    return list(ACTIONS.keys())
+
+
+def count_capable():
+    return [a for a, spec in ACTIONS.items() if spec["takes_count"]]
+
+
+def phrasing_count():
+    """Distinct hand-written surface forms, for a sanity check on coverage."""
+    train = sum(len(v) for reg in PHRASINGS.values() for v in reg.values())
+    held = sum(len(v) for v in HELDOUT_PHRASINGS.values())
+    counts = sum(len(v) for v in COUNT_PATTERNS.values())
+    negs = sum(len(v) for v in NEGATIVES.values())
+    prohibit = len(PROHIBIT_PATTERNS) * len(ACTION_VERBS)
+    return {"l1_train": train, "l1_heldout": held,
+            "l2_patterns": counts, "negatives": negs,
+            "prohibitions": prohibit,
+            "prohibit_heldout": len(HELDOUT_PROHIBIT_PATTERNS) * len(ACTION_VERBS),
+            "joiners": len(JOINERS), "joiners_heldout": len(HELDOUT_JOINERS)}
+
+
+if __name__ == "__main__":
+    import json
+
+    print(json.dumps(phrasing_count(), indent=2))
+    print(f"\nactions: {len(ACTIONS)}  count-capable: {count_capable()}")
+    missing = sorted(set(ACTIONS) - set(PHRASINGS))
+    if missing:
+        print(f"WARNING: no phrasings for {missing}")
+    no_verb = sorted(set(ACTIONS) - set(ACTION_VERBS) - {"stop"})
+    if no_verb:
+        print(f"WARNING: no prohibition verb form for {no_verb}")
